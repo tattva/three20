@@ -10,13 +10,14 @@ This object provides a couple basic features for parsing pbxproj files:
 * Getting a dependency list
 * Adding one pbxproj to another pbxproj as a dependency
 
-Version 1.0.
+Version 1.1.
 
 History:
 1.0 - October 20, 2010: Initial hacked-together version finished. It is alive!
+1.1 - January 11, 2011: Add configuration settings to all configurations by default.
 
 Created by Jeff Verkoeyen on 2010-10-18.
-Copyright 2009-2010 Facebook
+Copyright 2009-2011 Facebook
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -77,7 +78,7 @@ class Pbxproj(object):
 	# Three20
 	# Three20:Three20-Xcode3.2.5
 	# /path/to/project.xcodeproj/project.pbxproj
-	def __init__(self, name):	
+	def __init__(self, name):
 		self._project_data = None
 
 		parts = name.split(':')
@@ -96,7 +97,7 @@ class Pbxproj(object):
 				else:
 					(self.target, ) = result.groups()
 
-		match = re.search('([a-zA-Z0-9\.\-+"]+)\.xcodeproj', self.name)
+		match = re.search('([^/\\\\]+)\.xcodeproj', self.name)
 		if not match:
 			self._project_name = self.name
 		else:
@@ -163,6 +164,28 @@ class Pbxproj(object):
 			logging.error("Unable to open the project file at this path (is it readable?): "+self.path())
 			return None
 
+
+		# Get configuration list guid
+
+		result = re.search('[A-Z0-9]+ \/\* '+re.escape(self.target)+' \*\/ = {\n[ \t]+isa = PBXNativeTarget;(?:.|\n)+?buildConfigurationList = ([A-Z0-9]+) \/\* Build configuration list for PBXNativeTarget "'+re.escape(self.target)+'" \*\/;',
+		                   project_data)
+
+		if result:
+			(self.configurationListGuid, ) = result.groups()
+		else:
+			self.configurationListGuid = None
+
+
+		# Get configuration list
+		
+		if self.configurationListGuid:
+			match = re.search(re.escape(self.configurationListGuid)+' \/\* Build configuration list for PBXNativeTarget "'+re.escape(self.target)+'" \*\/ = \{\n[ \t]+isa = XCConfigurationList;\n[ \t]+buildConfigurations = \(\n((?:.|\n)+?)\);', project_data)
+			if not match:
+				logging.error("Couldn't find the configuration list.")
+				return False
+
+			(configurationList,) = match.groups()
+			self.configurations = re.findall('[ \t]+([A-Z0-9]+) \/\* (.+) \*\/,\n', configurationList)
 
 		# Get build phases
 
@@ -479,6 +502,86 @@ class Pbxproj(object):
 			return False
 
 		return True
+
+	# Get the PBXFileReference from the given PBXBuildFile guid.
+	def get_filerefguid_from_buildfileguid(self, buildfileguid):
+		project_data = self.get_project_data()
+		match = re.search(buildfileguid+' \/\* .+ \*\/ = {isa = PBXBuildFile; fileRef = ([A-Z0-9]+) \/\* .+ \*\/;', project_data)
+
+		if not match:
+			logging.error("Couldn't find PBXBuildFile row.")
+			return None
+
+		(filerefguid, ) = match.groups()
+		
+		return filerefguid
+
+	def get_filepath_from_filerefguid(self, filerefguid):
+		project_data = self.get_project_data()
+		match = re.search(filerefguid+' \/\* .+ \*\/ = {isa = PBXFileReference; .+ path = (.+); .+ };', project_data)
+
+		if not match:
+			logging.error("Couldn't find PBXFileReference row.")
+			return None
+
+		(path, ) = match.groups()
+		
+		return path
+
+
+	# Get all source files that are "built" in this project. This includes files built for
+	# libraries, executables, and unit testing.
+	def get_built_sources(self):
+		project_data = self.get_project_data()
+		match = re.search('\/\* Begin PBXSourcesBuildPhase section \*\/\n((?:.|\n)+?)\/\* End PBXSourcesBuildPhase section \*\/', project_data)
+
+		if not match:
+			logging.error("Couldn't find PBXSourcesBuildPhase section.")
+			return None
+		
+		(buildphasedata, ) = match.groups()
+		
+		buildfileguids = re.findall('[ \t]+([A-Z0-9]+) \/\* .+ \*\/,\n', buildphasedata)
+		
+		project_path = os.path.dirname(os.path.abspath(self.xcodeprojpath()))
+		
+		filenames = []
+		
+		for buildfileguid in buildfileguids:
+			filerefguid = self.get_filerefguid_from_buildfileguid(buildfileguid)
+			filepath = self.get_filepath_from_filerefguid(filerefguid)
+
+			filenames.append(os.path.join(project_path, filepath.strip('"')))
+
+		return filenames
+
+
+	# Get all header files that are "built" in this project. This includes files built for
+	# libraries, executables, and unit testing.
+	def get_built_headers(self):
+		project_data = self.get_project_data()
+		match = re.search('\/\* Begin PBXHeadersBuildPhase section \*\/\n((?:.|\n)+?)\/\* End PBXHeadersBuildPhase section \*\/', project_data)
+
+		if not match:
+			logging.error("Couldn't find PBXHeadersBuildPhase section.")
+			return None
+		
+		(buildphasedata, ) = match.groups()
+
+		buildfileguids = re.findall('[ \t]+([A-Z0-9]+) \/\* .+ \*\/,\n', buildphasedata)
+		
+		project_path = os.path.dirname(os.path.abspath(self.xcodeprojpath()))
+		
+		filenames = []
+		
+		for buildfileguid in buildfileguids:
+			filerefguid = self.get_filerefguid_from_buildfileguid(buildfileguid)
+			filepath = self.get_filepath_from_filerefguid(filerefguid)
+			
+			filenames.append(os.path.join(project_path, filepath.strip('"')))
+
+		return filenames
+
 
 	def add_dependency(self, dep):
 		project_data = self.get_project_data()
