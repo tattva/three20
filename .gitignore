@@ -18,3 +18,4 @@ src/Three20UINavigator/*.h
 src/Three20UI/*.h
 .*.swp
 extensions/
+*.pyc
