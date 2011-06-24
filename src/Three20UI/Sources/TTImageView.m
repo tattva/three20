@@ -206,6 +206,7 @@
 
     } else {
       TTURLRequest* request = [TTURLRequest requestWithURL:_urlPath delegate:self];
+      request.cachePolicy = TTURLRequestCachePolicyEtag;
       request.response = [[[TTURLImageResponse alloc] init] autorelease];
 
       if (![request send]) {
